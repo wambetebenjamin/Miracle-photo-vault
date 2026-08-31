@@ -932,6 +932,7 @@ body,.btn,.input,.select,.textarea,.chip,.tag,.kicker,.lead{font-family:var(--f-
   <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.4"/><path d="M12 7.4V12l3 1.8"/></symbol>
   <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="1.8"/><path d="M9.6 4.5v15"/></symbol>
   <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20.4 4.4v4.4H16"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M9.6 14.4 14.4 9.6"/><path d="M11.2 6.6 13 4.8a3.9 3.9 0 0 1 5.5 5.5l-1.8 1.8"/><path d="M12.8 17.4 11 19.2a3.9 3.9 0 0 1-5.5-5.5l1.8-1.8"/></symbol>
 </svg>
 
 <div class="app">
@@ -2369,6 +2370,7 @@ function renderCategories() {
       b.addEventListener('click', ev => { ev.stopPropagation(); fn(); });
       return b;
     };
+    acts.append(act('i-link', 'Share this category', () => generateSharePage(c.id)));
     acts.append(act('i-edit', 'Rename or recolour', () => openCatDialog(c.id)));
     acts.append(act('i-trash', 'Delete category', () => deleteCategory(c.id)));
     card.append(mark, body, acts);
@@ -2841,6 +2843,122 @@ async function downloadSingle(bundleId, index) {
 function refreshCounts() { renderRail(); if (route === 'home') renderHome(); if (route === 'gallery') renderGallery(); }
 
 /* ============================================================
+   SHARE — build a self-contained share page (per category or all).
+   The generated file embeds the photos and a small viewer with
+   per-category "download all" (zip). Host or send that one file.
+   ============================================================ */
+async function generateSharePage(categoryId) {
+  const scoped = categoryId ? state.bundles.filter(b => b.categoryId === categoryId) : state.bundles.slice();
+  if (!scoped.length) { toast('Nothing to share', categoryId ? 'That category has no bundles yet.' : 'Your archive is empty.', 'warn'); return; }
+  const dismiss = toast('Building share page', 'Re-encoding photos for sharing — this can take a moment.', 'info', 20000);
+
+  const catMap = new Map();
+  for (const b of scoped) {
+    const cat = catById(b.categoryId);
+    const key = b.categoryId || 'none';
+    if (!catMap.has(key)) catMap.set(key, { name: catName(b.categoryId), color: cat ? cat.color : '#5b7f95', bundles: [] });
+    const entry = catMap.get(key);
+    const photos = [];
+    for (const p of b.photos) {
+      try {
+        const src = await renderExport(p, { size: 'hd', format: 'image/jpeg', quality: 0.82, enhance: false });
+        photos.push({ src, name: p.name || 'photo.jpg', caption: p.caption || '', alt: p.alt || '' });
+      } catch (e) {}
+    }
+    if (photos.length) entry.bundles.push({ title: b.title, caption: b.caption || '', photos });
+  }
+  const data = {
+    title: categoryId ? catName(categoryId) + ' — Miracle share' : 'Miracle — shared archive',
+    generated: new Date().toISOString(),
+    categories: Array.from(catMap.values()).filter(c => c.bundles.length)
+  };
+  dismiss();
+  if (!data.categories.length) { toast('Nothing to share', 'Those bundles have no readable photos.', 'warn'); return; }
+  const json = JSON.stringify(data).replace(/</g, '\\u003c');
+  const name = (categoryId ? slug(catName(categoryId)) : 'archive') + '-share.html';
+  triggerDownload(new Blob([shareTemplate(json, data.title)], { type: 'text/html' }), name);
+  toast('Share page ready', name + ' — host it or send it; it works on its own.', 'ok', 6000);
+}
+
+/* Standalone viewer template. The inner script avoids backticks/${ so it can
+   live inside this outer template literal. */
+function shareTemplate(json, title) {
+  return '<!DOCTYPE html>\n<html lang="en"><head><meta charset="utf-8">\n' +
+  '<meta name="viewport" content="width=device-width, initial-scale=1">\n' +
+  '<title>' + esc(title) + '</title>\n' +
+  '<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>\n' +
+  '<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..600&family=Instrument+Sans:wght@400..700&display=swap" rel="stylesheet">\n' +
+  '<style>' +
+  ':root{--bg:#0b1218;--panel:#141d26;--line:#233140;--fg:#eef2f4;--fg2:#9fb0ba;--acc:#79cbc4;--acc2:#aee8e1;--accfg:#052420}' +
+  '*{box-sizing:border-box}body{margin:0;background:radial-gradient(90% 60% at 50% -10%,#10202b,var(--bg));color:var(--fg);font-family:"Instrument Sans",system-ui,sans-serif;-webkit-font-smoothing:antialiased}' +
+  'header{max-width:1080px;margin:0 auto;padding:44px 22px 10px}' +
+  'h1{font-family:Fraunces,Georgia,serif;font-weight:420;font-size:clamp(30px,5vw,52px);letter-spacing:-.02em;margin:6px 0}' +
+  'h1 em{color:var(--acc2);font-style:italic}' +
+  '.sub{color:var(--fg2);font-size:13px}' +
+  'main{max-width:1080px;margin:0 auto;padding:14px 22px 70px}' +
+  '.cat{margin:34px 0}' +
+  '.cat-head{display:flex;align-items:center;gap:11px;flex-wrap:wrap;margin-bottom:14px}' +
+  '.dot{width:11px;height:11px;border-radius:50%;background:var(--mk,#79cbc4);box-shadow:0 0 14px var(--mk,#79cbc4)}' +
+  '.cat-head h2{font-family:Fraunces,Georgia,serif;font-weight:420;font-size:22px;margin:0}' +
+  '.count{color:var(--fg2);font-size:12px}' +
+  '.dl{margin-left:auto;display:inline-flex;align-items:center;gap:8px;background:linear-gradient(180deg,var(--acc2),var(--acc));color:var(--accfg);border:0;border-radius:8px;padding:9px 15px;font-weight:600;font-size:13px;cursor:pointer;box-shadow:0 8px 24px -8px rgba(121,203,196,.5)}' +
+  '.dl:hover{filter:brightness(1.06);transform:translateY(-1px)}' +
+  '.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}' +
+  '.ph{position:relative;aspect-ratio:1;border-radius:10px;overflow:hidden;border:1px solid var(--line);background:var(--panel);cursor:zoom-in}' +
+  '.ph img{width:100%;height:100%;object-fit:cover;transition:transform .5s ease}' +
+  '.ph:hover img{transform:scale(1.06)}' +
+  '.bun{grid-column:1/-1;color:var(--fg2);font-size:12px;letter-spacing:.08em;text-transform:uppercase;margin-top:8px}' +
+  '.ov{position:fixed;inset:0;background:rgba(4,8,12,.92);display:none;align-items:center;justify-content:center;flex-direction:column;gap:14px;padding:24px;z-index:9}' +
+  '.ov.open{display:flex}' +
+  '.ov img{max-width:92vw;max-height:76vh;border-radius:8px;box-shadow:0 30px 80px rgba(0,0,0,.6)}' +
+  '.ov .bar{display:flex;gap:10px;align-items:center}' +
+  '.ov p{color:var(--fg2);font-size:13px;margin:0}' +
+  '.ghost{background:transparent;color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:9px 15px;font-size:13px;cursor:pointer}' +
+  'footer{color:var(--fg2);font-size:12px;text-align:center;padding:20px}' +
+  '</style></head><body>\n' +
+  '<header><div class="sub">Shared with Miracle</div><h1>' + esc(title).split('—')[0] + '<em>' + (esc(title).split('—')[1] || '') + '</em></h1><div class="sub" id="meta"></div></header>\n' +
+  '<main id="root"></main>\n' +
+  '<div class="ov" id="ov"><img id="ovImg" alt=""><div class="bar"><button class="dl" id="ovDl">Download</button><button class="ghost" id="ovX">Close</button></div><p id="ovCap"></p></div>\n' +
+  '<footer>Single self-contained file. Photos open and download without any server.</footer>\n' +
+  '<script type="application/json" id="shareData">' + json + '</' + 'script>\n' +
+  '<script>(function(){' +
+  'var data=JSON.parse(document.getElementById("shareData").textContent);' +
+  'document.getElementById("meta").textContent=data.categories.length+" categor"+(data.categories.length===1?"y":"ies")+" · generated "+new Date(data.generated).toLocaleDateString();' +
+  'var CRC=(function(){var t=new Uint32Array(256);for(var n=0;n<256;n++){var c=n;for(var k=0;k<8;k++)c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1);t[n]=c>>>0;}return t;})();' +
+  'function crc32(b){var c=0xFFFFFFFF;for(var i=0;i<b.length;i++)c=CRC[(c^b[i])&0xFF]^(c>>>8);return(c^0xFFFFFFFF)>>>0;}' +
+  'function toBytes(u){var i=u.indexOf(",");var bin=atob(u.slice(i+1));var o=new Uint8Array(bin.length);for(var j=0;j<bin.length;j++)o[j]=bin.charCodeAt(j);return o;}' +
+  'function zip(entries){var enc=new TextEncoder();var parts=[],cd=[],off=0;var d=new Date();var tm=(d.getHours()<<11)|(d.getMinutes()<<5)|(d.getSeconds()>>1);var dt=(((d.getFullYear()-1980)<<9)|((d.getMonth()+1)<<5)|d.getDate());' +
+  'for(var e=0;e<entries.length;e++){var nm=enc.encode(entries[e].name);var da=entries[e].data;var cr=crc32(da);var lh=new DataView(new ArrayBuffer(30));lh.setUint32(0,0x04034b50,true);lh.setUint16(4,20,true);lh.setUint16(6,2048,true);lh.setUint16(8,0,true);lh.setUint16(10,tm,true);lh.setUint16(12,dt,true);lh.setUint32(14,cr,true);lh.setUint32(18,da.length,true);lh.setUint32(22,da.length,true);lh.setUint16(26,nm.length,true);lh.setUint16(28,0,true);parts.push(new Uint8Array(lh.buffer),nm,da);var ch=new DataView(new ArrayBuffer(46));ch.setUint32(0,0x02014b50,true);ch.setUint16(4,20,true);ch.setUint16(6,20,true);ch.setUint16(8,2048,true);ch.setUint16(10,0,true);ch.setUint16(12,tm,true);ch.setUint16(14,dt,true);ch.setUint32(16,cr,true);ch.setUint32(20,da.length,true);ch.setUint32(24,da.length,true);ch.setUint16(28,nm.length,true);ch.setUint32(42,off,true);cd.push(new Uint8Array(ch.buffer),nm);off+=30+nm.length+da.length;}' +
+  'var cds=0;for(var x=0;x<cd.length;x++)cds+=cd[x].length;var eo=new DataView(new ArrayBuffer(22));eo.setUint32(0,0x06054b50,true);eo.setUint16(8,entries.length,true);eo.setUint16(10,entries.length,true);eo.setUint32(12,cds,true);eo.setUint32(16,off,true);' +
+  'return new Blob(parts.concat(cd,[new Uint8Array(eo.buffer)]),{type:"application/zip"});}' +
+  'function save(blob,name){var u=URL.createObjectURL(blob);var a=document.createElement("a");a.href=u;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(u)},1000);}' +
+  'function slug(s){return String(s).toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,40)||"file";}' +
+  'var root=document.getElementById("root");' +
+  'var ov=document.getElementById("ov"),ovImg=document.getElementById("ovImg"),ovCap=document.getElementById("ovCap"),ovDl=document.getElementById("ovDl");' +
+  'document.getElementById("ovX").onclick=function(){ov.classList.remove("open");};' +
+  'ov.addEventListener("click",function(e){if(e.target===ov)ov.classList.remove("open");});' +
+  'function openOv(p){ovImg.src=p.src;ovCap.textContent=p.caption||p.name;ovDl.onclick=function(){save(toBytes(p.src),slug(p.name)+".jpg");};ov.classList.add("open");}' +
+  'data.categories.forEach(function(cat){' +
+  '  var sec=document.createElement("section");sec.className="cat";' +
+  '  var head=document.createElement("div");head.className="cat-head";' +
+  '  var dot=document.createElement("span");dot.className="dot";dot.style.setProperty("--mk",cat.color);' +
+  '  var h2=document.createElement("h2");h2.textContent=cat.name;' +
+  '  var all=[];cat.bundles.forEach(function(b){b.photos.forEach(function(p){all.push({p:p,b:b});});});' +
+  '  var cnt=document.createElement("span");cnt.className="count";cnt.textContent=all.length+" photo"+(all.length===1?"":"s");' +
+  '  var dl=document.createElement("button");dl.className="dl";dl.textContent="Download all";' +
+  '  dl.onclick=function(){var entries=[];for(var i=0;i<all.length;i++){entries.push({name:slug(cat.name)+"/"+String(i+1).padStart(2,"0")+"-"+slug(all[i].p.name).slice(0,32)+".jpg",data:toBytes(all[i].p.src)});}save(zip(entries),slug(cat.name)+".zip");};' +
+  '  head.appendChild(dot);head.appendChild(h2);head.appendChild(cnt);head.appendChild(dl);sec.appendChild(head);' +
+  '  var grid=document.createElement("div");grid.className="grid";' +
+  '  cat.bundles.forEach(function(b){' +
+  '    if(cat.bundles.length>1){var bl=document.createElement("div");bl.className="bun";bl.textContent=b.title;grid.appendChild(bl);}' +
+  '    b.photos.forEach(function(p){var f=document.createElement("div");f.className="ph";var im=document.createElement("img");im.src=p.src;im.alt=p.alt||p.caption||"";im.loading="lazy";f.appendChild(im);f.onclick=function(){openOv(p);};grid.appendChild(f);});' +
+  '  });' +
+  '  sec.appendChild(grid);root.appendChild(sec);' +
+  '});' +
+  '})();</' + 'script>\n</body></html>';
+}
+
+/* ============================================================
    DELETE
    ============================================================ */
 async function deleteBundle(id) {
@@ -2992,6 +3110,7 @@ function buildMoreMenu() {
   importInput.addEventListener('change', () => { if (importInput.files[0]) importLibrary(importInput.files[0]); importInput.value = ''; });
   document.body.append(importInput);
   menu.append(
+    item('i-link', 'Share archive (single file)', () => generateSharePage(null)),
     item('i-download', 'Export archive (JSON)', exportLibrary),
     item('i-upload', 'Import archive (JSON)', () => importInput.click())
   );
@@ -3145,6 +3264,7 @@ window.Miracle = {
   get draft() { return draft; },
   ingest, pushPhotos, processImage, renderExport, buildZip, crc32, dataUrlToBytes,
   saveDraft, go, openBundle, openCatDialog, exportLibrary, importLibrary,
+  generateSharePage, shareTemplate,
   confirmDialog, toast, visibleBundles, refreshAll, persist, loadState,
   get backend() { return backend; }
 };
