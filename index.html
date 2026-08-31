@@ -3229,9 +3229,14 @@ function buildMoreMenu() {
   $('#moreBtn').addEventListener('click', e => {
     e.stopPropagation();
     const open = menu.classList.toggle('open');
-    if (open) info.textContent = backend === 'idb'
-      ? 'IndexedDB · ' + fmtBytes(stateBytes()) + ' used'
-      : 'localStorage fallback · ' + fmtBytes(stateBytes()) + ' of about 5 MB';
+    if (open) {
+      info.textContent = (backend === 'idb'
+        ? 'IndexedDB · ' + fmtBytes(stateBytes()) + ' used'
+        : 'localStorage fallback · ' + fmtBytes(stateBytes()) + ' of about 5 MB')
+        + ' · ' + plural(state.bundles.length, 'bundle') + '\n'
+        + 'Kept in this browser only, at ' + location.host + '. Another address, '
+        + 'browser or device starts empty — download a backup to be safe.';
+    }
   });
   document.addEventListener('click', () => menu.classList.remove('open'));
 }
