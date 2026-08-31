@@ -96,7 +96,6 @@ body{
 body::after{
   content:"";position:fixed;inset:0;z-index:9999;pointer-events:none;opacity:var(--grain);
   background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
-  mix-blend-mode:overlay;
 }
 img{display:block;max-width:100%}
 button,input,select,textarea{font:inherit;color:inherit}
@@ -659,10 +658,10 @@ html[data-theme="light"] .ambient-vignette{background:radial-gradient(120% 90% a
 .ambient-grain{position:absolute;inset:0;opacity:.06;mix-blend-mode:overlay;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E")}
 
 /* --- glass surfaces --- */
-.rail,.topbar,.tabbar,.panel,.card,.sheet,.empty,.stat,.cat-card,.dl-panel,.menu,.toast,.dropzone,.thumb,.tag-input,.input,.select,.textarea{
-  backdrop-filter:blur(16px) saturate(1.15);-webkit-backdrop-filter:blur(16px) saturate(1.15);
-}
-.topbar{background:color-mix(in srgb,var(--bg) 62%,transparent)}
+/* Perf: backdrop-filter used to apply to every card, thumb, panel and input.
+   Over an animated background each one re-samples a blurred backdrop on every
+   frame, which made the whole UI lag. Surfaces keep solid backgrounds instead. */
+.topbar{background:color-mix(in srgb,var(--bg) 93%,transparent)}
 .rail{background:var(--bg-tint)}
 
 /* --- hero --- */
@@ -757,15 +756,7 @@ html[data-theme="light"] .ambient-scrim{background:linear-gradient(180deg,rgba(2
 /* z-order so colored light sits over the photo */
 .amb-layer{z-index:0}
 .ambient-scrim{z-index:1}
-.ambient::before{
-  content:"";position:absolute;inset:-10%;z-index:2;mix-blend-mode:screen;pointer-events:none;
-  background:
-    radial-gradient(46% 40% at 16% 20%, rgba(38,128,150,.34), transparent 62%),
-    radial-gradient(42% 36% at 84% 26%, rgba(214,140,54,.26), transparent 62%),
-    radial-gradient(70% 52% at 50% 104%, rgba(28,86,120,.3), transparent 72%);
-  animation:glowDrift 26s ease-in-out infinite alternate;
-}
-@keyframes glowDrift{from{transform:translate3d(-2.5%,-1.5%,0) scale(1)}to{transform:translate3d(2.5%,2%,0) scale(1.1)}}
+/* Perf: the animated full-screen screen-blend glow layer was removed. */
 .ambient-vignette{z-index:3;background:radial-gradient(120% 92% at 50% -10%,transparent 44%,rgba(2,6,10,.58) 100%)}
 html[data-theme="light"] .ambient::before{opacity:.5}
 .ambient-grain{z-index:4}
@@ -889,7 +880,7 @@ body,.btn,.input,.select,.textarea,.chip,.tag,.kicker,.lead{font-family:var(--f-
 }
 
 /* ---------- v5: batch picker (folder import) ---------- */
-.lb{position:fixed;inset:0;z-index:9000;display:grid;place-items:center;padding:20px;background:rgba(6,8,10,.72);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
+.lb{position:fixed;inset:0;z-index:9000;display:grid;place-items:center;padding:20px;background:rgba(6,8,10,.86)}
 .batch{background:linear-gradient(180deg,var(--panel-2),var(--panel));border:1px solid var(--line);border-radius:var(--r-lg);width:min(1040px,94vw);max-height:88vh;display:flex;flex-direction:column;box-shadow:0 40px 90px rgba(0,0,0,.6);overflow:hidden}
 .batch header{display:flex;align-items:center;gap:10px;padding:16px 18px;border-bottom:1px solid var(--line);flex-wrap:wrap}
 .batch header h2{font-family:var(--f-display);font-weight:400;font-size:20px;letter-spacing:-.018em}
@@ -1773,13 +1764,14 @@ async function ingest(files, sourceLabel) {
   ingesting = true;
   const prog = $('#progress'), fill = $('#progressFill'), label = $('#progressLabel'), count = $('#progressCount');
   $('#dropzone').classList.add('busy');
+  try {
   prog.classList.add('on');
   fill.style.width = '4%';
   count.textContent = '0 / ' + batch.length;
   label.textContent = 'Reading files';
 
   let done = 0, failed = 0;
-  const results = await mapPool(batch, 3, async (file) => {
+  const results = await mapPool(batch, 2, async (file) => {
     label.textContent = file.name || 'image';
     try {
       const p = await processImage(file);
@@ -1798,17 +1790,20 @@ async function ingest(files, sourceLabel) {
   const good = results.filter(r => r.ok).map(r => r.photo);
   const added = pushPhotos(good);
 
-  ingesting = false;
-  $('#dropzone').classList.remove('busy');
-  prog.classList.remove('on');
-  fill.style.width = '0%';
-
   const bits = [];
   if (added) bits.push(plural(added, 'photo') + ' added');
   if (failed) bits.push(plural(failed, 'file') + ' could not be read');
   if (skippedByLimit) bits.push(plural(skippedByLimit, 'file') + ' skipped (limit)');
   if (added) toast('Added', bits.join(' · ') + (sourceLabel ? ' · from ' + sourceLabel : ''), failed ? 'warn' : 'ok');
   else toast('Nothing added', bits.join(' · ') || 'Those files could not be read as images.', 'bad');
+  } finally {
+    /* Always release the lock and clear the progress UI, even if something
+       above threw - otherwise every later paste/drop is rejected forever. */
+    ingesting = false;
+    $('#dropzone').classList.remove('busy');
+    prog.classList.remove('on');
+    fill.style.width = '0%';
+  }
 }
 
 /* Add already-processed photo objects to the draft. Returns how many were taken. */
@@ -3401,7 +3396,7 @@ boot().catch(err => {
     pre.src = src;
   }
   function cycle() {
-    if (REDUCED) return;
+    if (REDUCED || document.hidden) return;
     idx = (idx + 1) % pool.length;
     var nxt = activeLayer ^ 1;
     setLayer(layers[nxt], pool[idx]);
@@ -3536,13 +3531,19 @@ boot().catch(err => {
       })(el, target);
     }
   }
+  var queued = false;
+  function scheduleScan() {
+    if (queued) return; queued = true;
+    requestAnimationFrame(function () { queued = false; attachTilt(); applyReveal(); animateStats(); });
+  }
   if ('MutationObserver' in window) {
-    var mo = new MutationObserver(function () { requestAnimationFrame(function () { attachTilt(); applyReveal(); }); });
+    var mo = new MutationObserver(scheduleScan);
     mo.observe(document.body, { childList: true, subtree: true });
   }
-  setInterval(function () { attachTilt(); applyReveal(); animateStats(); }, 1200);
-  window.addEventListener('load', function () { attachTilt(); applyReveal(); animateStats(); buildHero(); });
-  attachTilt(); applyReveal(); animateStats();
+  setInterval(function () { if (!document.hidden) scheduleScan(); }, 4000);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) { scheduleScan(); buildHero(); } });
+  window.addEventListener('load', function () { scheduleScan(); buildHero(); });
+  scheduleScan();
 })();
 </script>
 </body>
