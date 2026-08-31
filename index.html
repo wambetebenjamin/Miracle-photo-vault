@@ -943,6 +943,7 @@ body,.btn,.input,.select,.textarea,.chip,.tag,.kicker,.lead{font-family:var(--f-
   <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20.4 4.4v4.4H16"/></symbol>
   <symbol id="i-link" viewBox="0 0 24 24"><path d="M9.6 14.4 14.4 9.6"/><path d="M11.2 6.6 13 4.8a3.9 3.9 0 0 1 5.5 5.5l-1.8 1.8"/><path d="M12.8 17.4 11 19.2a3.9 3.9 0 0 1-5.5-5.5l1.8-1.8"/></symbol>
   <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7.5A2 2 0 0 1 5 5.5h3.9a2 2 0 0 1 1.5.7L12 8.2h7a2 2 0 0 1 2 2v7.3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M7 18a4 4 0 0 1-.4-8A5.5 5.5 0 0 1 17.3 9.2 3.9 3.9 0 0 1 17 18z"/></symbol>
 </svg>
 
 <div class="app">
@@ -3203,6 +3204,7 @@ function buildMoreMenu() {
   document.body.append(importInput);
   menu.append(
     item('i-folder', 'Import from folder…', () => pickFolder()),
+    item('i-cloud', 'Cloud sync…', () => { if (window.MiracleCloud) window.MiracleCloud.open(); }),
     item('i-link', 'Share archive (single file)', () => generateSharePage(null)),
     item('i-download', 'Export archive (JSON)', exportLibrary),
     item('i-upload', 'Import archive (JSON)', () => importInput.click())
@@ -3374,6 +3376,245 @@ boot().catch(err => {
   document.body.append(t);
 });
 
+})();
+</script>
+
+<script>
+/* ================================================================
+   CLOUD SYNC — optional Supabase backend.
+   Nothing here runs unless you add a project URL and anon key, so the
+   app stays fully local and offline-capable by default.
+   ================================================================ */
+(function () {
+  "use strict";
+  var CFG_KEY = 'miracle.cloud';
+  var BUCKET = 'photos';
+  var TABLE = 'archive';
+  var client = null, sdkPromise = null, panel = null;
+
+  function cfg() { try { return JSON.parse(localStorage.getItem(CFG_KEY) || '{}') || {}; } catch (e) { return {}; } }
+  function saveCfg(c) { localStorage.setItem(CFG_KEY, JSON.stringify(c)); }
+  function M() { return window.Miracle; }
+
+  function loadSdk() {
+    if (window.supabase && window.supabase.createClient) return Promise.resolve(window.supabase);
+    if (sdkPromise) return sdkPromise;
+    sdkPromise = new Promise(function (res, rej) {
+      var s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
+      s.async = true;
+      s.onload = function () {
+        (window.supabase && window.supabase.createClient) ? res(window.supabase) : rej(new Error('The Supabase SDK loaded but did not initialise.'));
+      };
+      s.onerror = function () { sdkPromise = null; rej(new Error('Could not reach the Supabase SDK (offline, or blocked).')); };
+      document.head.appendChild(s);
+    });
+    return sdkPromise;
+  }
+
+  async function getClient() {
+    var c = cfg();
+    if (!c.url || !c.anonKey) throw new Error('Add your Supabase project URL and anon key first.');
+    if (client) return client;
+    var sdk = await loadSdk();
+    client = sdk.createClient(c.url, c.anonKey);
+    return client;
+  }
+  function resetClient() { client = null; }
+
+  async function user() {
+    var c = await getClient();
+    var r = await c.auth.getSession();
+    if (r.error) throw r.error;
+    return (r.data && r.data.session && r.data.session.user) || null;
+  }
+
+  async function signIn(email) {
+    var c = await getClient();
+    var r = await c.auth.signInWithOtp({ email: String(email).trim(), options: { emailRedirectTo: location.href } });
+    if (r.error) throw r.error;
+    return true;
+  }
+  async function signOut() {
+    var c = await getClient();
+    var r = await c.auth.signOut();
+    if (r.error) throw r.error;
+    resetClient();
+  }
+
+  function dataUrlToBlob(src) {
+    var bytes = M().dataUrlToBytes(src);
+    var m = /^data:([^;,]+)/.exec(src || '');
+    return new Blob([bytes], { type: (m && m[1]) || 'image/jpeg' });
+  }
+  function blobToDataUrl(blob) {
+    return new Promise(function (res, rej) {
+      var fr = new FileReader();
+      fr.onload = function () { res(String(fr.result)); };
+      fr.onerror = function () { rej(new Error('could not read the downloaded image')); };
+      fr.readAsDataURL(blob);
+    });
+  }
+  function extOf(name, src) {
+    var m = /\.([a-z0-9]{2,5})$/i.exec(name || '');
+    if (m) return m[1].toLowerCase();
+    var t = /^data:image\/([a-z0-9.+-]+)/i.exec(src || '');
+    return (t ? t[1] : 'jpg').replace('jpeg', 'jpg');
+  }
+
+  /* Upload every local photo, then store the metadata row for this user. */
+  async function pushArchive(onProgress) {
+    var me = await user();
+    if (!me) throw new Error('Sign in first.');
+    var c = await getClient();
+    var st = M().state;
+    var bundles = [];
+    var total = 0, sent = 0;
+    st.bundles.forEach(function (b) { total += b.photos.length; });
+    for (var i = 0; i < st.bundles.length; i++) {
+      var b = st.bundles[i];
+      var photos = [];
+      for (var j = 0; j < b.photos.length; j++) {
+        var p = b.photos[j];
+        if (!p.src) continue;
+        var path = me.id + '/' + b.id + '/' + p.id + '.' + extOf(p.name, p.src);
+        var up = await c.storage.from(BUCKET).upload(path, dataUrlToBlob(p.src), { contentType: 'image/jpeg', upsert: true });
+        if (up.error) throw new Error('Upload failed: ' + up.error.message);
+        sent++;
+        if (onProgress) onProgress(sent, total, p.name || ('photo ' + sent));
+        photos.push({ id: p.id, name: p.name, caption: p.caption || '', alt: p.alt || '', w: p.w || 0, h: p.h || 0, bytes: p.bytes || 0, path: path });
+      }
+      bundles.push({ id: b.id, title: b.title, caption: b.caption || '', categoryId: b.categoryId || null, coverId: b.coverId || null, createdAt: b.createdAt || null, photos: photos });
+    }
+    var payload = { categories: st.categories, bundles: bundles, settings: st.settings, updatedAt: new Date().toISOString() };
+    var r = await c.from(TABLE).upsert({ user_id: me.id, data: payload, updated_at: payload.updatedAt }, { onConflict: 'user_id' });
+    if (r.error) throw new Error('Could not save the archive record: ' + r.error.message);
+    localStorage.setItem('miracle.cloud.lastSync', payload.updatedAt);
+    return { bundles: bundles.length, photos: sent };
+  }
+
+  /* Download the archive for the signed-in user into this browser. */
+  async function pullArchive(onProgress) {
+    var me = await user();
+    if (!me) throw new Error('Sign in first.');
+    var c = await getClient();
+    var r = await c.from(TABLE).select('data').eq('user_id', me.id).maybeSingle();
+    if (r.error) throw new Error('Could not read the archive record: ' + r.error.message);
+    if (!r.data || !r.data.data) throw new Error('No archive has been uploaded to this account yet.');
+    var payload = r.data.data;
+    var total = 0;
+    (payload.bundles || []).forEach(function (b) { total += (b.photos || []).length; });
+    var got = 0;
+    var bundles = [];
+    for (var i = 0; i < (payload.bundles || []).length; i++) {
+      var b = payload.bundles[i];
+      var photos = [];
+      for (var j = 0; j < (b.photos || []).length; j++) {
+        var p = b.photos[j];
+        var src = p.src;
+        if (!src && p.path) {
+          var su = await c.storage.from(BUCKET).createSignedUrl(p.path, 3600);
+          if (su.error) throw new Error('Could not link ' + (p.name || p.path) + ': ' + su.error.message);
+          var resp = await fetch(su.data.signedUrl);
+          if (!resp.ok) throw new Error('Could not download ' + (p.name || p.path) + ' (' + resp.status + ')');
+          src = await blobToDataUrl(await resp.blob());
+        }
+        if (!src) continue;
+        got++;
+        if (onProgress) onProgress(got, total, p.name || ('photo ' + got));
+        photos.push({ id: p.id, name: p.name || 'photo.jpg', caption: p.caption || '', alt: p.alt || '', w: p.w || 0, h: p.h || 0, bytes: p.bytes || 0, src: src });
+      }
+      if (!photos.length) continue;
+      bundles.push({ id: b.id, title: b.title || 'Untitled bundle', caption: b.caption || '', categoryId: b.categoryId || null, coverId: b.coverId || (photos[0] || {}).id || null, createdAt: b.createdAt || new Date().toISOString(), photos: photos });
+    }
+    var st = M().state;
+    if (payload.categories && payload.categories.length) st.categories = payload.categories;
+    st.bundles = bundles;
+    await M().persist();
+    if (M().refreshAll) M().refreshAll();
+    localStorage.setItem('miracle.cloud.lastSync', payload.updatedAt || new Date().toISOString());
+    return { bundles: bundles.length, photos: got };
+  }
+
+  /* ---------------- panel ---------------- */
+  function open() {
+    if (panel) { panel.style.display = 'grid'; refresh(); return; }
+    var c = cfg();
+    var ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;z-index:9200;display:grid;place-items:center;padding:20px;background:rgba(6,8,10,.86)';
+    ov.innerHTML =
+      '<div class="panel" style="width:min(560px,94vw);max-height:88vh;overflow:auto;padding:20px;border:1px solid var(--line);border-radius:var(--r-lg);background:var(--panel)">' +
+      '<div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">' +
+      '<h2 class="display d2" style="flex:1">Cloud sync</h2>' +
+      '<button class="btn btn-quiet" data-x>Close</button></div>' +
+      '<p class="lead" style="font-size:13px;margin:6px 0 14px">Optional. Your archive stays in this browser until you connect a Supabase project and upload it. See <code>supabase-setup.sql</code> for the one-time setup.</p>' +
+      '<div data-status style="padding:10px 12px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--panel-2);font-size:12.5px;margin-bottom:14px"></div>' +
+      '<label style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--fg-3)">Project URL</label>' +
+      '<input class="input" data-url placeholder="https://xxxx.supabase.co" style="margin:6px 0 10px">' +
+      '<label style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--fg-3)">Anon key</label>' +
+      '<input class="input" data-key placeholder="eyJhbGciOi..." style="margin:6px 0 12px">' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px"><button class="btn" data-save>Save connection</button></div>' +
+      '<hr style="border:0;border-top:1px solid var(--line);margin:14px 0">' +
+      '<label style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--fg-3)">Your email</label>' +
+      '<div style="display:flex;gap:8px;margin:6px 0 14px;flex-wrap:wrap"><input class="input" data-email placeholder="you@example.com" style="flex:1;min-width:200px"><button class="btn" data-signin>Email me a sign-in link</button></div>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+      '<button class="btn btn-primary" data-push>Upload my archive</button>' +
+      '<button class="btn" data-pull>Download to this device</button>' +
+      '<button class="btn btn-quiet" data-signout>Sign out</button></div>' +
+      '<p data-msg style="font-size:12.5px;color:var(--fg-2);margin-top:12px;min-height:18px"></p>' +
+      '</div>';
+    document.body.appendChild(ov);
+    panel = ov;
+    ov.querySelector('[data-url]').value = c.url || '';
+    ov.querySelector('[data-key]').value = c.anonKey || '';
+    ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
+    ov.querySelector('[data-x]').addEventListener('click', close);
+    ov.querySelector('[data-save]').addEventListener('click', function () {
+      saveCfg({ url: ov.querySelector('[data-url]').value.trim().replace(/\/$/, ''), anonKey: ov.querySelector('[data-key]').value.trim() });
+      resetClient(); msg('Connection saved.', 'ok'); refresh();
+    });
+    ov.querySelector('[data-signin]').addEventListener('click', function () {
+      var email = ov.querySelector('[data-email]').value;
+      if (!email) { msg('Enter your email address first.', 'bad'); return; }
+      run(function () { return signIn(email); }, function () { msg('Check ' + email + ' for the sign-in link, then reopen this panel.', 'ok'); refresh(); });
+    });
+    ov.querySelector('[data-signout]').addEventListener('click', function () {
+      run(signOut, function () { msg('Signed out.', 'ok'); refresh(); });
+    });
+    ov.querySelector('[data-push]').addEventListener('click', function () {
+      run(function () { return pushArchive(prog); }, function (r) { msg('Uploaded ' + r.bundles + ' bundles and ' + r.photos + ' photos.', 'ok'); refresh(); });
+    });
+    ov.querySelector('[data-pull]').addEventListener('click', function () {
+      run(function () { return pullArchive(prog); }, function (r) { msg('Restored ' + r.bundles + ' bundles and ' + r.photos + ' photos to this device.', 'ok'); refresh(); });
+    });
+    refresh();
+  }
+  function close() { if (panel) panel.style.display = 'none'; }
+  function msg(t, kind) {
+    if (!panel) return;
+    var n = panel.querySelector('[data-msg]');
+    n.textContent = t;
+    n.style.color = kind === 'bad' ? 'var(--bad)' : kind === 'ok' ? 'var(--ok)' : 'var(--fg-2)';
+  }
+  function prog(done, total, name) { msg('Working on ' + name + ' (' + done + ' of ' + total + ')…'); }
+  function run(fn, after) {
+    msg('Working…');
+    Promise.resolve().then(fn).then(function (r) { after && after(r); })
+      .catch(function (e) { msg((e && e.message) || String(e), 'bad'); });
+  }
+  function refresh() {
+    if (!panel) return;
+    var box = panel.querySelector('[data-status]');
+    var c = cfg();
+    var last = localStorage.getItem('miracle.cloud.lastSync');
+    box.textContent = (c.url ? 'Project: ' + c.url : 'No project connected yet.')
+      + (last ? ' · last sync ' + new Date(last).toLocaleString() : '');
+    Promise.resolve().then(user).then(function (u) {
+      box.textContent += u ? ' · signed in as ' + (u.email || u.id) : ' · not signed in';
+    }).catch(function (e) { box.textContent += ' · ' + ((e && e.message) || 'not signed in'); });
+  }
+
+  window.MiracleCloud = { open: open, close: close, pushArchive: pushArchive, pullArchive: pullArchive, signIn: signIn, signOut: signOut, user: user, getClient: getClient, saveCfg: saveCfg, cfg: cfg, resetClient: resetClient };
 })();
 </script>
 
