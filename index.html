@@ -614,6 +614,106 @@ html[data-drawer="open"] .drawer-scrim{opacity:1;pointer-events:auto}
   .pages{overflow:visible}
   .page{display:block !important;padding:0}
 }
+
+/* ================================================================
+   CINEMATIC LAYER
+   Ambient imagery, glass surfaces, 3D depth, motion.
+   ================================================================ */
+html[data-theme="dark"]{
+  --bg:#07090b;
+  --bg-tint:rgba(10,12,15,.66);
+  --panel:rgba(17,20,24,.55);
+  --panel-2:rgba(26,30,36,.6);
+  --panel-3:rgba(40,45,53,.62);
+  --line:rgba(255,255,255,.10);
+  --line-2:rgba(255,255,255,.17);
+}
+html[data-theme="light"]{
+  --bg:#141518;
+  --bg-tint:rgba(248,247,244,.72);
+  --panel:rgba(252,251,248,.72);
+  --panel-2:rgba(244,242,238,.78);
+  --panel-3:rgba(230,228,222,.82);
+  --line:rgba(20,22,26,.12);
+  --line-2:rgba(20,22,26,.2);
+}
+html,body{background:var(--bg)}
+body{background:transparent}
+.app{position:relative;z-index:1}
+
+/* --- ambient background --- */
+.ambient{position:fixed;inset:0;z-index:0;overflow:hidden;background:var(--bg)}
+.amb-layer{position:absolute;inset:-4%;opacity:0;transition:opacity 2.4s var(--ease)}
+.amb-layer img{width:100%;height:100%;object-fit:cover;filter:saturate(.9) brightness(.92) contrast(1.03)}
+.amb-layer.is-on{opacity:1}
+.amb-layer.is-on img{animation:kenburns 16s linear forwards}
+@keyframes kenburns{from{transform:scale(1.03) translate(0,0)}to{transform:scale(1.18) translate(-2.2%,1.6%)}}
+.ambient-scrim{position:absolute;inset:0;background:linear-gradient(180deg,rgba(7,9,11,.9),rgba(7,9,11,.55) 38%,rgba(7,9,11,.86) 100%)}
+html[data-theme="light"] .ambient-scrim{background:linear-gradient(180deg,rgba(246,244,240,.9),rgba(246,244,240,.62) 40%,rgba(246,244,240,.9))}
+html[data-theme="light"] .amb-layer img{filter:saturate(.85) brightness(1.02)}
+.ambient-vignette{position:absolute;inset:0;background:radial-gradient(120% 90% at 50% -10%,transparent 42%,rgba(0,0,0,.52) 100%)}
+html[data-theme="light"] .ambient-vignette{background:radial-gradient(120% 90% at 50% -10%,transparent 46%,rgba(40,40,44,.28) 100%)}
+.ambient-grain{position:absolute;inset:0;opacity:.06;mix-blend-mode:overlay;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E")}
+
+/* --- glass surfaces --- */
+.rail,.topbar,.tabbar,.panel,.card,.sheet,.empty,.stat,.cat-card,.dl-panel,.menu,.toast,.dropzone,.thumb,.tag-input,.input,.select,.textarea{
+  backdrop-filter:blur(16px) saturate(1.15);-webkit-backdrop-filter:blur(16px) saturate(1.15);
+}
+.topbar{background:color-mix(in srgb,var(--bg) 62%,transparent)}
+.rail{background:var(--bg-tint)}
+
+/* --- hero --- */
+.hero{display:grid;grid-template-columns:1.05fr .95fr;gap:clamp(24px,4vw,56px);align-items:center;min-height:min(540px,62vh);padding:6px 0 26px}
+.hero-copy{position:relative;z-index:2}
+.hero-title{font-size:clamp(42px,6.4vw,86px);line-height:.98;letter-spacing:-.032em;margin:14px 0 16px;font-weight:400}
+.hero-title em{font-style:italic;color:var(--accent-2)}
+.hero-actions{display:flex;gap:12px;margin-top:26px;flex-wrap:wrap}
+.btn-lg{padding:13px 24px;font-size:14.5px;border-radius:9px}
+.btn-glass{border:1px solid var(--line-2);background:rgba(255,255,255,.07);color:var(--fg);backdrop-filter:blur(12px)}
+.btn-glass:hover{background:rgba(255,255,255,.14);transform:translateY(-1px)}
+.hero-stack{position:relative;perspective:1400px;height:clamp(300px,44vh,440px);z-index:1}
+.hero-card{
+  position:absolute;top:50%;left:50%;width:clamp(170px,44%,240px);aspect-ratio:4/5;border-radius:16px;overflow:hidden;
+  border:1px solid rgba(255,255,255,.16);box-shadow:0 34px 70px -24px rgba(0,0,0,.65);
+  transform:translate(-50%,-50%) rotate(var(--r,0deg)) translate(var(--tx,0px),var(--ty,0px)) rotateY(calc(var(--py,0)*1deg)) rotateX(calc(var(--px,0)*1deg)) translateZ(var(--z,0px));
+  transition:transform .6s var(--ease-out);will-change:transform;background:#111;
+}
+.hero-card img{width:100%;height:100%;object-fit:cover;transform:scale(1.02)}
+.hero-card .cap{position:absolute;inset:auto 0 0 0;padding:26px 12px 10px;font-size:11px;letter-spacing:.04em;color:#f1efe9;background:linear-gradient(to top,rgba(0,0,0,.72),transparent);opacity:.92}
+@media (max-width:900px){.hero{grid-template-columns:1fr;min-height:auto}.hero-stack{height:300px;order:2}}
+
+/* --- 3D cards --- */
+.grid-bundles,.grid-cats{perspective:1600px}
+.card,.cat-card{transform-style:preserve-3d;position:relative}
+.card::after{
+  content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;z-index:3;
+  background:radial-gradient(420px circle at var(--mx,50%) var(--my,40%),rgba(255,255,255,.12),transparent 46%);
+  opacity:0;transition:opacity var(--t);mix-blend-mode:soft-light;
+}
+.card:hover::after{opacity:1}
+.card:hover,.cat-card:hover{transform:translateY(-4px) rotateX(calc(var(--ry,0)*1deg)) rotateY(calc(var(--rx,0)*1deg));box-shadow:0 26px 60px -26px rgba(0,0,0,.7),0 0 0 1px var(--line-2)}
+
+/* --- scroll reveal --- */
+.rev{opacity:0;transform:translateY(26px) scale(.985)}
+.rev.rev-in{opacity:1;transform:none;transition:opacity .7s var(--ease) var(--d,0s),transform .7s var(--ease-out) var(--d,0s)}
+
+/* --- entrance with depth --- */
+.page.is-active{animation:pageIn .5s var(--ease-out) both}
+@keyframes pageIn{from{opacity:0;transform:translateY(14px) rotateX(2.5deg);transform-origin:top}to{opacity:1;transform:none}}
+.sheet{transform:translateY(20px) rotateX(4deg) scale(.98);transform-origin:top}
+.layer.open .sheet{transform:none}
+.lightbox.open .lb-stage img{animation:lbZoom .5s var(--ease-out)}
+@keyframes lbZoom{from{opacity:0;transform:scale(.9) translateZ(-60px)}to{opacity:1;transform:none}}
+
+/* --- topbar / brand shine --- */
+.brand-mark{transition:transform .4s var(--ease-out)}
+.brand:hover .brand-mark{transform:rotate(90deg)}
+
+@media (prefers-reduced-motion:reduce){
+  .amb-layer.is-on img{animation:none}
+  .card:hover,.cat-card:hover{transform:none}
+  .hero-card{transition:none}
+}
 </style>
 </head>
 <body>
@@ -735,10 +835,17 @@ html[data-drawer="open"] .drawer-scrim{opacity:1;pointer-events:auto}
 
       <!-- ---------- OVERVIEW ---------- -->
       <section class="page is-active" id="page-home" aria-labelledby="homeTitle">
-        <div class="page-head">
-          <span class="kicker" id="todayLine">Archive</span>
-          <h1 class="display d1" id="homeTitle">Your photo archive</h1>
-          <p class="lead" id="homeLead">Everything is stored in this browser. Nothing is uploaded anywhere.</p>
+        <div class="hero">
+          <div class="hero-copy">
+            <span class="kicker" id="todayLine">Archive</span>
+            <h1 class="display hero-title" id="homeTitle">Your photo<br>archive</h1>
+            <p class="lead" id="homeLead">Everything is stored in this browser. Nothing is uploaded anywhere.</p>
+            <div class="hero-actions">
+              <button class="btn btn-primary btn-lg" data-go="composer">Start a bundle</button>
+              <button class="btn btn-glass btn-lg" data-go="gallery">Browse gallery</button>
+            </div>
+          </div>
+          <div class="hero-stack" id="heroStack" aria-hidden="true"></div>
         </div>
 
         <div class="stats" id="homeStats"></div>
@@ -899,6 +1006,15 @@ html[data-drawer="open"] .drawer-scrim{opacity:1;pointer-events:auto}
   <a href="#composer" data-go="composer"><svg class="ic"><use href="#i-plus"></use></svg>New</a>
 </nav>
 <div class="drawer-scrim" id="drawerScrim"></div>
+
+<!-- ===== Ambient cinematic background ===== -->
+<div class="ambient" id="ambient" aria-hidden="true">
+  <div class="amb-layer is-on" id="ambA"><img alt=""></div>
+  <div class="amb-layer" id="ambB"><img alt=""></div>
+  <div class="ambient-scrim"></div>
+  <div class="ambient-vignette"></div>
+  <div class="ambient-grain"></div>
+</div>
 
 <!-- Drag veil -->
 <div class="veil" id="veil" aria-hidden="true">
@@ -2867,6 +2983,149 @@ boot().catch(err => {
   document.body.append(t);
 });
 
+})();
+</script>
+
+<script>
+/* ================================================================
+   VISUAL ENGINE — ambient imagery, 3D depth, motion.
+   Purely presentational; all app logic lives above.
+   ================================================================ */
+(function () {
+  "use strict";
+  var REDUCED = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var ASSETS = ['bg-ridge.jpg', 'bg-coast.jpg', 'bg-dune.jpg', 'bg-forest.jpg', 'bg-concrete.jpg'];
+  var path = function (f) { return 'assets/' + f; };
+
+  /* ---- ambient crossfade + Ken Burns ---- */
+  var layers = [document.getElementById('ambA'), document.getElementById('ambB')];
+  var pool = ASSETS.map(path), idx = 0, activeLayer = 0;
+  function setLayer(layer, src) {
+    var img = layer && layer.querySelector('img');
+    if (!img) return;
+    if (img.getAttribute('src') === src) return;
+    var pre = new Image();
+    pre.onload = function () { img.src = src; };
+    pre.onerror = function () {};
+    pre.src = src;
+  }
+  function cycle() {
+    if (REDUCED) return;
+    idx = (idx + 1) % pool.length;
+    var nxt = activeLayer ^ 1;
+    setLayer(layers[nxt], pool[idx]);
+    layers[nxt].classList.add('is-on');
+    layers[activeLayer].classList.remove('is-on');
+    activeLayer = nxt;
+  }
+  if (layers[0]) { setLayer(layers[0], pool[0]); layers[0].classList.add('is-on'); }
+  function refreshPool() {
+    try {
+      var M = window.Miracle; if (!M || !M.state) return;
+      var own = [];
+      for (var i = 0; i < M.state.bundles.length && own.length < 6; i++) {
+        var b = M.state.bundles[i];
+        var p = b.photos.filter(function (x) { return x.id === b.coverId; })[0] || b.photos[0];
+        if (p) own.push(p.src);
+      }
+      pool = own.concat(ASSETS.map(path));
+    } catch (e) {}
+  }
+  setInterval(cycle, 9000);
+  setInterval(refreshPool, 15000);
+  setTimeout(refreshPool, 900);
+
+  /* ---- hero 3D stack ---- */
+  function buildHero() {
+    var host = document.getElementById('heroStack');
+    if (!host) return;
+    var M = window.Miracle;
+    var srcs = [];
+    if (M && M.state) {
+      for (var i = 0; i < M.state.bundles.length && srcs.length < 5; i++) {
+        var b = M.state.bundles[i];
+        for (var j = 0; j < b.photos.length && srcs.length < 5; j++) srcs.push({ src: b.photos[j].src, cap: b.title });
+      }
+    }
+    if (!srcs.length) srcs = ASSETS.slice(0, 5).map(function (f) { return { src: path(f), cap: '' }; });
+    host.textContent = '';
+    var n = srcs.length, mid = (n - 1) / 2;
+    srcs.forEach(function (s, k) {
+      var off = k - mid;
+      var c = document.createElement('div');
+      c.className = 'hero-card';
+      c.style.setProperty('--r', (off * 7) + 'deg');
+      c.style.setProperty('--tx', (off * 44) + 'px');
+      c.style.setProperty('--ty', (Math.abs(off) * 16) + 'px');
+      c.style.setProperty('--z', (60 - Math.abs(off) * 40) + 'px');
+      var im = document.createElement('img'); im.src = s.src; im.alt = '';
+      c.appendChild(im);
+      if (s.cap) { var cap = document.createElement('div'); cap.className = 'cap'; cap.textContent = s.cap; c.appendChild(cap); }
+      host.appendChild(c);
+    });
+  }
+  var hero = document.querySelector('.hero');
+  if (hero && !REDUCED) {
+    hero.addEventListener('pointermove', function (e) {
+      var r = hero.getBoundingClientRect(), h = document.getElementById('heroStack');
+      if (!h) return;
+      var x = (e.clientX - r.left) / r.width - 0.5, y = (e.clientY - r.top) / r.height - 0.5;
+      h.style.setProperty('--py', (x * 16).toFixed(2));
+      h.style.setProperty('--px', (-y * 12).toFixed(2));
+    });
+    hero.addEventListener('pointerleave', function () {
+      var h = document.getElementById('heroStack'); if (!h) return;
+      h.style.setProperty('--py', 0); h.style.setProperty('--px', 0);
+    });
+  }
+  window.addEventListener('hashchange', function () {
+    if (location.hash === '#home' || location.hash === '' || location.hash === '#') setTimeout(buildHero, 90);
+  });
+  setTimeout(buildHero, 120);
+
+  /* ---- 3D tilt + sheen on cards ---- */
+  function attachTilt() {
+    if (REDUCED) return;
+    var cards = document.querySelectorAll('.card, .cat-card');
+    for (var i = 0; i < cards.length; i++) {
+      var card = cards[i];
+      if (card.__tilt) continue; card.__tilt = true;
+      card.addEventListener('pointermove', function (e) {
+        var r = this.getBoundingClientRect();
+        var x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
+        this.style.setProperty('--rx', ((x - 0.5) * 6).toFixed(2));
+        this.style.setProperty('--ry', ((0.5 - y) * 6).toFixed(2));
+        this.style.setProperty('--mx', (x * 100).toFixed(1) + '%');
+        this.style.setProperty('--my', (y * 100).toFixed(1) + '%');
+      });
+      card.addEventListener('pointerleave', function () {
+        this.style.setProperty('--rx', 0); this.style.setProperty('--ry', 0);
+      });
+    }
+  }
+
+  /* ---- scroll reveal ---- */
+  var io = ('IntersectionObserver' in window) ? new IntersectionObserver(function (es) {
+    es.forEach(function (en) { if (en.isIntersecting) { en.target.classList.add('rev-in'); io.unobserve(en.target); } });
+  }, { threshold: 0.06 }) : null;
+  function applyReveal() {
+    if (!io || REDUCED) return;
+    var els = document.querySelectorAll('.card, .cat-card, .stat, .empty, .hero-copy');
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      if (el.__rev) continue; el.__rev = true;
+      el.classList.add('rev');
+      el.style.setProperty('--d', ((i % 6) * 70) + 'ms');
+      io.observe(el);
+    }
+  }
+  if ('MutationObserver' in window) {
+    var mo = new MutationObserver(function () { requestAnimationFrame(function () { attachTilt(); applyReveal(); }); });
+    mo.observe(document.body, { childList: true, subtree: true });
+  }
+  setInterval(function () { attachTilt(); applyReveal(); }, 1200);
+  window.addEventListener('load', function () { attachTilt(); applyReveal(); buildHero(); });
+  attachTilt(); applyReveal();
 })();
 </script>
 </body>
