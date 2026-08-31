@@ -842,6 +842,51 @@ html[data-theme="light"]{
 .hero-title em,.brand-text b{font-style:italic}
 body,.btn,.input,.select,.textarea,.chip,.tag,.kicker,.lead{font-family:var(--f-ui)}
 .kicker{letter-spacing:.22em}
+
+/* ================================================================
+   v5 — LIVELY: vivid grade, glowing CTA, animated type, count-up
+   ================================================================ */
+/* push saturation so imagery reads alive */
+.amb-layer img{filter:saturate(1.42) contrast(1.1) brightness(1.03)}
+.ambient-scrim{background:linear-gradient(180deg,rgba(7,12,18,.74),rgba(7,12,18,.26) 44%,rgba(7,12,18,.78))}
+.card-cover img{filter:saturate(1.22) contrast(1.07)}
+
+/* animated display accent: underline draws in */
+.hero-title em{font-style:italic;color:var(--accent-2);position:relative}
+.hero-title em::after{
+  content:"";position:absolute;left:1%;right:1%;bottom:.04em;height:.085em;border-radius:99px;
+  background:linear-gradient(90deg,var(--accent),var(--accent-2));
+  transform:scaleX(0);transform-origin:left;animation:underlineDraw .9s var(--ease-out) .45s forwards;
+}
+@keyframes underlineDraw{to{transform:scaleX(1)}}
+
+/* pulsing kicker dot */
+.kicker{display:inline-flex;align-items:center;gap:8px}
+.kicker::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--accent);animation:ping 2.2s ease-out infinite}
+@keyframes ping{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--accent) 55%,transparent)}70%{box-shadow:0 0 0 9px transparent}100%{box-shadow:0 0 0 0 transparent}}
+
+/* glowing, shining primary CTA */
+.btn-primary{position:relative;overflow:hidden;box-shadow:0 0 0 1px var(--accent-line),0 12px 32px -12px color-mix(in srgb,var(--accent) 78%,transparent),0 0 26px -6px color-mix(in srgb,var(--accent) 40%,transparent)}
+.btn-primary::before{content:"";position:absolute;top:0;left:-70%;width:45%;height:100%;background:linear-gradient(100deg,transparent,rgba(255,255,255,.55),transparent);transform:skewX(-20deg);animation:sheen 3.4s var(--ease) infinite;pointer-events:none}
+@keyframes sheen{0%{left:-70%}55%{left:140%}100%{left:140%}}
+.btn-primary:hover{transform:translateY(-2px) scale(1.02);filter:saturate(1.1) brightness(1.05)}
+.btn-primary .ic{transition:transform .25s var(--ease)}
+.btn-primary:hover .ic{transform:translateX(2px)}
+/* hero CTA gets an extra breathing glow */
+.hero-actions .btn-primary{animation:glowPulse 2.8s ease-in-out infinite}
+@keyframes glowPulse{0%,100%{box-shadow:0 0 0 1px var(--accent-line),0 12px 32px -12px color-mix(in srgb,var(--accent) 70%,transparent),0 0 18px -8px color-mix(in srgb,var(--accent) 30%,transparent)}50%{box-shadow:0 0 0 1px var(--accent-line),0 12px 36px -10px color-mix(in srgb,var(--accent) 85%,transparent),0 0 34px -4px color-mix(in srgb,var(--accent) 55%,transparent)}}
+
+/* card CTA row highlight */
+.card-actions .icon-btn{background:color-mix(in srgb,var(--panel-3) 78%,transparent);border:1px solid var(--line)}
+.card-actions .icon-btn:hover{background:var(--accent);color:var(--accent-fg);border-color:transparent}
+
+/* stat numbers pop */
+.stat .v{font-size:30px}
+
+@media (prefers-reduced-motion:reduce){
+  .btn-primary::before,.hero-actions .btn-primary,.kicker::before,.hero-title em::after{animation:none}
+  .hero-title em::after{transform:scaleX(1)}
+}
 </style>
 </head>
 <body>
@@ -966,7 +1011,7 @@ body,.btn,.input,.select,.textarea,.chip,.tag,.kicker,.lead{font-family:var(--f-
         <div class="hero">
           <div class="hero-copy">
             <span class="kicker" id="todayLine">Archive</span>
-            <h1 class="display hero-title" id="homeTitle">Your photo<br>archive</h1>
+            <h1 class="display hero-title" id="homeTitle">Your photo<br><em>archive</em></h1>
             <p class="lead" id="homeLead">Everything is stored in this browser. Nothing is uploaded anywhere.</p>
             <div class="hero-actions">
               <button class="btn btn-primary btn-lg" data-go="composer">Start a bundle</button>
@@ -3122,7 +3167,7 @@ boot().catch(err => {
 (function () {
   "use strict";
   var REDUCED = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
-  var ASSETS = ['bg-ridge.jpg', 'bg-coast.jpg', 'bg-dune.jpg', 'bg-forest.jpg', 'bg-concrete.jpg'];
+  var ASSETS = ['bg-wave.jpg', 'bg-jungle.jpg', 'bg-stars.jpg', 'bg-birds.jpg', 'bg-bokeh.jpg'];
   var path = function (f) { return 'assets/' + f; };
 
   /* ---- ambient crossfade + Ken Burns ---- */
@@ -3250,13 +3295,36 @@ boot().catch(err => {
       io.observe(el);
     }
   }
+  /* count-up numbers */
+  function animateStats() {
+    if (REDUCED) return;
+    var els = document.querySelectorAll('.stat .v');
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      if (el.__counted) continue;
+      var target = parseInt(String(el.textContent).replace(/[^\d]/g, ''), 10);
+      if (!isFinite(target) || target <= 0) continue;
+      el.__counted = true;
+      (function (node, to) {
+        var t0 = null, dur = 900;
+        function step(ts) {
+          if (!t0) t0 = ts;
+          var p = Math.min(1, (ts - t0) / dur);
+          var eased = 1 - Math.pow(1 - p, 3);
+          node.textContent = String(Math.round(to * eased));
+          if (p < 1) requestAnimationFrame(step);
+        }
+        requestAnimationFrame(step);
+      })(el, target);
+    }
+  }
   if ('MutationObserver' in window) {
     var mo = new MutationObserver(function () { requestAnimationFrame(function () { attachTilt(); applyReveal(); }); });
     mo.observe(document.body, { childList: true, subtree: true });
   }
-  setInterval(function () { attachTilt(); applyReveal(); }, 1200);
-  window.addEventListener('load', function () { attachTilt(); applyReveal(); buildHero(); });
-  attachTilt(); applyReveal();
+  setInterval(function () { attachTilt(); applyReveal(); animateStats(); }, 1200);
+  window.addEventListener('load', function () { attachTilt(); applyReveal(); animateStats(); buildHero(); });
+  attachTilt(); applyReveal(); animateStats();
 })();
 </script>
 </body>
