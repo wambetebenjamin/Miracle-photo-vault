@@ -887,6 +887,24 @@ body,.btn,.input,.select,.textarea,.chip,.tag,.kicker,.lead{font-family:var(--f-
   .btn-primary::before,.hero-actions .btn-primary,.kicker::before,.hero-title em::after{animation:none}
   .hero-title em::after{transform:scaleX(1)}
 }
+
+/* ---------- v5: batch picker (folder import) ---------- */
+.lb{position:fixed;inset:0;z-index:9000;display:grid;place-items:center;padding:20px;background:rgba(6,8,10,.72);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
+.batch{background:linear-gradient(180deg,var(--panel-2),var(--panel));border:1px solid var(--line);border-radius:var(--r-lg);width:min(1040px,94vw);max-height:88vh;display:flex;flex-direction:column;box-shadow:0 40px 90px rgba(0,0,0,.6);overflow:hidden}
+.batch header{display:flex;align-items:center;gap:10px;padding:16px 18px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.batch header h2{font-family:var(--f-display);font-weight:400;font-size:20px;letter-spacing:-.018em}
+.batch header p{color:var(--fg-2);font-size:12.5px;margin-top:3px}
+.batch header .spacer,.batch footer .spacer{margin-left:auto}
+.batch-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:9px;padding:16px;overflow:auto;flex:1;min-height:0}
+.btile{position:relative;aspect-ratio:1;border-radius:var(--r-md);overflow:hidden;cursor:pointer;border:2px solid transparent;background:var(--panel-3);transition:border-color var(--t-fast),transform var(--t-fast)}
+.btile img{width:100%;height:100%;object-fit:cover}
+.btile:hover{transform:translateY(-2px)}
+.btile.on{border-color:var(--accent)}
+.btile .chk{position:absolute;top:6px;left:6px;width:20px;height:20px;border-radius:6px;background:rgba(6,12,16,.7);border:1px solid rgba(255,255,255,.4);display:grid;place-items:center;color:transparent;font-size:12px;font-weight:700;line-height:1}
+.btile.on .chk{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
+.btile .nm{position:absolute;left:0;right:0;bottom:0;padding:12px 6px 4px;font-size:9.5px;color:#e8f0f2;background:linear-gradient(to top,rgba(0,0,0,.72),transparent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.batch footer{display:flex;align-items:center;gap:10px;padding:13px 18px;border-top:1px solid var(--line)}
+.batch footer .n{color:var(--fg-2);font-size:12.5px}
 </style>
 </head>
 <body>
@@ -933,6 +951,7 @@ body,.btn,.input,.select,.textarea,.chip,.tag,.kicker,.lead{font-family:var(--f-
   <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="1.8"/><path d="M9.6 4.5v15"/></symbol>
   <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20.4 4.4v4.4H16"/></symbol>
   <symbol id="i-link" viewBox="0 0 24 24"><path d="M9.6 14.4 14.4 9.6"/><path d="M11.2 6.6 13 4.8a3.9 3.9 0 0 1 5.5 5.5l-1.8 1.8"/><path d="M12.8 17.4 11 19.2a3.9 3.9 0 0 1-5.5-5.5l1.8-1.8"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7.5A2 2 0 0 1 5 5.5h3.9a2 2 0 0 1 1.5.7L12 8.2h7a2 2 0 0 1 2 2v7.3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
 </svg>
 
 <div class="app">
@@ -1016,6 +1035,7 @@ body,.btn,.input,.select,.textarea,.chip,.tag,.kicker,.lead{font-family:var(--f-
             <p class="lead" id="homeLead">Everything is stored in this browser. Nothing is uploaded anywhere.</p>
             <div class="hero-actions">
               <button class="btn btn-primary btn-lg" data-go="composer">Start a bundle</button>
+              <button class="btn btn-glass btn-lg" id="heroDir"><svg class="ic"><use href="#i-folder"></use></svg>Import folder</button>
               <button class="btn btn-glass btn-lg" data-go="gallery">Browse gallery</button>
             </div>
           </div>
@@ -1811,6 +1831,81 @@ function routeIngest(files, label) {
   ingest(files, label);
 }
 
+/* ---- Folder import: scan a folder (e.g. your WhatsApp images) and let you
+   select a batch before anything is loaded in. ---- */
+async function gatherFromHandle(dir) {
+  const out = [];
+  async function walk(handle, depth) {
+    if (depth > 6 || !handle.entries) return;
+    for await (const entry of handle.entries()) {
+      const h = entry[1];
+      if (h.kind === 'file') {
+        try { const f = await h.getFile(); if (f.type.startsWith('image/') || /\.(jpe?g|png|webp|avif|gif)$/i.test(f.name)) out.push(f); } catch (e) {}
+      } else if (h.kind === 'directory') await walk(h, depth + 1);
+    }
+  }
+  await walk(dir, 0);
+  return out;
+}
+async function pickFolder() {
+  try {
+    if (window.showDirectoryPicker) {
+      const handle = await window.showDirectoryPicker({ mode: 'read' });
+      const files = await gatherFromHandle(handle);
+      if (!files.length) { toast('No photos found', 'That folder has no images in it.', 'warn'); return; }
+      openBatchPicker(files, handle.name || 'folder');
+    } else {
+      const input = document.createElement('input');
+      input.type = 'file'; input.multiple = true;
+      input.setAttribute('webkitdirectory', ''); input.setAttribute('directory', '');
+      input.addEventListener('change', () => {
+        const files = Array.from(input.files || []).filter(f => f.type.startsWith('image/') || /\.(jpe?g|png|webp|avif|gif)$/i.test(f.name));
+        if (!files.length) toast('No photos found', 'That folder has no images in it.', 'warn');
+        else openBatchPicker(files, 'folder');
+        input.remove();
+      });
+      document.body.appendChild(input); input.click();
+    }
+  } catch (e) { if (e && e.name !== 'AbortError') toast('Folder could not be read', e && e.message, 'warn'); }
+}
+function openBatchPicker(files, srcName) {
+  const cap = 800; const list = files.slice(0, cap);
+  const sel = new Set(list);
+  const ov = el('div', { class: 'lb' });
+  const urls = new Map();
+  function close() { urls.forEach(u => URL.revokeObjectURL(u)); ov.remove(); }
+  const head = el('header', {}, [
+    el('div', {}, [el('h2', {}, ['Select photos to import']), el('p', {}, [srcName + ' · ' + list.length + ' photo' + (list.length === 1 ? '' : 's') + (files.length > cap ? ' (first ' + cap + ' shown)' : '')])]),
+    el('div', { class: 'spacer' }),
+    el('button', { class: 'btn ghost', onclick: () => { list.forEach(f => sel.add(f)); paint(); } }, ['Select all']),
+    el('button', { class: 'btn ghost', onclick: () => { sel.clear(); paint(); } }, ['None']),
+    el('button', { class: 'btn icon', title: 'Cancel', onclick: close }, [icon('close')])
+  ]);
+  const grid = el('div', { class: 'batch-grid' });
+  list.forEach(f => {
+    const url = URL.createObjectURL(f); urls.set(f, url);
+    const t = el('div', { class: 'btile on', onclick: () => { sel.has(f) ? sel.delete(f) : sel.add(f); t.classList.toggle('on', sel.has(f)); paint(); } }, [
+      el('img', { src: url, alt: f.name, loading: 'lazy' }),
+      el('span', { class: 'chk' }, [icon('check', 'ic ic-sm')]),
+      el('span', { class: 'nm' }, [f.name])
+    ]);
+    grid.appendChild(t);
+  });
+  const goBtn = el('button', { class: 'btn primary' });
+  const nLabel = el('span', { class: 'n' });
+  const foot = el('footer', {}, [nLabel, el('div', { class: 'spacer' }), goBtn]);
+  function paint() {
+    goBtn.textContent = 'Import ' + sel.size + (sel.size === 1 ? ' photo' : ' photos');
+    goBtn.disabled = sel.size === 0;
+    nLabel.textContent = sel.size + ' of ' + list.length + ' selected';
+  }
+  goBtn.onclick = () => { const picked = list.filter(f => sel.has(f)); close(); routeIngest(picked, srcName); };
+  paint();
+  ov.append(el('div', { class: 'batch' }, [head, grid, foot]));
+  ov.addEventListener('click', e => { if (e.target === ov) close(); });
+  document.body.appendChild(ov);
+}
+
 /* ---------- paste ---------- */
 function onPaste(e) {
   if (e.defaultPrevented) return;
@@ -2102,6 +2197,8 @@ function setupComposer() {
   dz.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fi.click(); } });
   fi.addEventListener('change', () => { ingest(fi.files, 'your device'); fi.value = ''; });
   $('#quickPaste').addEventListener('click', () => { if (location.hash !== '#composer') location.hash = '#composer'; fi.click(); });
+  const heroDir = $('#heroDir');
+  if (heroDir) heroDir.addEventListener('click', () => pickFolder());
 
   ['inTitle', 'inCap', 'inCat'].forEach(id => $('#' + id).addEventListener('input', () => {
     readForm();
@@ -3110,6 +3207,7 @@ function buildMoreMenu() {
   importInput.addEventListener('change', () => { if (importInput.files[0]) importLibrary(importInput.files[0]); importInput.value = ''; });
   document.body.append(importInput);
   menu.append(
+    item('i-folder', 'Import from folder…', () => pickFolder()),
     item('i-link', 'Share archive (single file)', () => generateSharePage(null)),
     item('i-download', 'Export archive (JSON)', exportLibrary),
     item('i-upload', 'Import archive (JSON)', () => importInput.click())
@@ -3264,7 +3362,7 @@ window.Miracle = {
   get draft() { return draft; },
   ingest, pushPhotos, processImage, renderExport, buildZip, crc32, dataUrlToBytes,
   saveDraft, go, openBundle, openCatDialog, exportLibrary, importLibrary,
-  generateSharePage, shareTemplate,
+  generateSharePage, shareTemplate, pickFolder, openBatchPicker, resetDraft,
   confirmDialog, toast, visibleBundles, refreshAll, persist, loadState,
   get backend() { return backend; }
 };
