@@ -41,3 +41,19 @@ empty, publish directory `/`.
 - Use *More → Export archive* to write a JSON copy of every bundle and photo.
 - Storage is per browser and per origin. Clearing site data removes the archive,
   so export before switching browsers or domains.
+
+## Publishing your photos to the live link
+
+The site is static, so photos uploaded in the browser stay in that browser.
+To make them visible to anyone with your link:
+
+1. In the app: **More -> Publish to my site…** — this downloads `public-archive.js`.
+2. Commit that file to the repository root (drag and drop on github.com works).
+3. Vercel redeploys in about 30 seconds.
+
+Anyone opening the link now sees the photos immediately, grouped by category,
+and can download a whole category at once. Visitors get a read-only view;
+nothing is written to their browser, and your own archive still wins if you
+open the link in the browser where you built it.
+
+To update the published set, publish again and replace the file.

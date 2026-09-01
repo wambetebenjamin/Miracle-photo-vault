@@ -1285,6 +1285,8 @@ body,.btn,.input,.select,.textarea,.chip,.tag,.kicker,.lead{font-family:var(--f-
 
 <div class="toaster" id="toaster" aria-live="polite" aria-atomic="false"></div>
 
+<!-- Optional: a published archive committed to the repo. Missing file is fine. -->
+<script src="public-archive.js" onerror="void 0"></script>
 <script>
 "use strict";
 /* ============================================================
@@ -1491,7 +1493,37 @@ function saveState() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => { persist(); }, 180);
 }
+/* ---- published archive ----------------------------------------------
+   `public-archive.js` is an optional file committed to the repo. When it
+   exists, visitors to the deployed URL see those photos immediately, with
+   nothing to upload and no account. It is read-only and never written to
+   the visitor's storage. */
+let publishedMode = false;
+function seedPublished() {
+  const pub = window.MIRACLE_PUBLISHED;
+  if (!pub || !Array.isArray(pub.bundles)) return false;
+  const usable = pub.bundles.filter(b => b && Array.isArray(b.photos) && b.photos.some(p => p && p.src));
+  if (!usable.length) return false;
+  if (state.bundles.length) return false;   /* owner with a local archive wins */
+  publishedMode = true;
+  if (Array.isArray(pub.categories) && pub.categories.length) state.categories = pub.categories;
+  state.bundles = usable.map((b, i) => ({
+    id: 'pub_' + i,
+    title: b.title || 'Shared bundle',
+    caption: b.caption || '',
+    categoryId: b.categoryId || (state.categories[0] || {}).id || null,
+    coverId: b.coverId || null,
+    createdAt: b.createdAt || new Date().toISOString(),
+    photos: b.photos.filter(p => p && p.src).map((p, j) => ({
+      id: p.id || 'pp_' + i + '_' + j, src: p.src, name: p.name || 'photo.jpg',
+      caption: p.caption || '', alt: p.alt || '', w: p.w || 0, h: p.h || 0, bytes: p.bytes || 0
+    }))
+  }));
+  return true;
+}
+
 async function persist() {
+  if (publishedMode) return;   /* a shared archive is never written to this browser */
   try {
     if (backend === 'idb' && db) { await idbPut(db, IDB_KEY, state); }
     else { localStorage.setItem(LS_KEY, JSON.stringify(state)); }
@@ -2463,6 +2495,7 @@ function renderCategories() {
       b.addEventListener('click', ev => { ev.stopPropagation(); fn(); });
       return b;
     };
+    acts.append(act('i-download', 'Download all photos in this category', () => downloadCategory(c.id)));
     acts.append(act('i-link', 'Share this category', () => generateSharePage(c.id)));
     acts.append(act('i-edit', 'Rename or recolour', () => openCatDialog(c.id)));
     acts.append(act('i-trash', 'Delete category', () => deleteCategory(c.id)));
@@ -2973,6 +3006,56 @@ async function generateSharePage(categoryId) {
   toast('Share page ready', name + ' — host it or send it; it works on its own.', 'ok', 6000);
 }
 
+/* Build the optional public-archive.js that ships with the deploy. */
+async function publishArchive() {
+  if (!state.bundles.length) { toast('Nothing to publish', 'Add some photos first.', 'warn'); return; }
+  const dismiss = toast('Preparing', 'Re-encoding your photos for the web — this can take a moment.', 'info', 20000);
+  const bundles = [];
+  let photos = 0;
+  for (const b of state.bundles) {
+    const out = [];
+    for (const p of b.photos) {
+      try {
+        const src = await renderExport(p, { size: 'hd', format: 'image/jpeg', quality: 0.8, enhance: false });
+        out.push({ id: p.id, src, name: p.name || 'photo.jpg', caption: p.caption || '', alt: p.alt || '', w: p.w || 0, h: p.h || 0, bytes: p.bytes || 0 });
+        photos++;
+      } catch (e) {}
+    }
+    if (!out.length) continue;
+    bundles.push({ id: b.id, title: b.title, caption: b.caption || '', categoryId: b.categoryId || null, coverId: b.coverId || null, createdAt: b.createdAt || null, photos: out });
+  }
+  dismiss();
+  if (!bundles.length) { toast('Nothing to publish', 'Those bundles have no readable photos.', 'warn'); return; }
+  const payload = { app: 'miracle-published', generated: new Date().toISOString(), categories: state.categories, bundles };
+  const js = 'window.MIRACLE_PUBLISHED = ' + JSON.stringify(payload).replace(/</g, '\\u003c') + ';\n';
+  triggerDownload(new Blob([js], { type: 'text/javascript' }), 'public-archive.js');
+  toast('Ready to publish', photos + ' photos packaged. Commit public-archive.js to your repo and Vercel will deploy it.', 'ok', 9000);
+}
+
+/* Zip every photo in one category (or the whole archive). */
+function downloadCategory(catId) {
+  const label = catId ? catName(catId) : 'archive';
+  const list = state.bundles.filter(b => !catId || b.categoryId === catId);
+  const entries = [];
+  let n = 0;
+  list.forEach(b => {
+    (b.photos || []).forEach(p => {
+      if (!p.src) return;
+      n++;
+      const m = /\.([a-z0-9]{2,5})$/i.exec(p.name || '');
+      const ext = (m ? m[1] : 'jpg').toLowerCase();
+      entries.push({
+        name: slug(b.title || 'bundle') + '/' + String(n).padStart(2, '0') + '-' + slug(p.name || 'photo').slice(0, 32) + '.' + ext,
+        data: dataUrlToBytes(p.src)
+      });
+    });
+  });
+  if (!entries.length) { toast('Nothing to download', 'That category has no photos yet.', 'warn'); return; }
+  const name = slug(label) + '.zip';
+  triggerDownload(buildZip(entries), name);
+  toast('Downloaded', plural(entries.length, 'photo') + ' from ' + label + ' zipped up.', 'ok');
+}
+
 /* Standalone viewer template. The inner script avoids backticks/${ so it can
    live inside this outer template literal. */
 function shareTemplate(json, title) {
@@ -3204,6 +3287,7 @@ function buildMoreMenu() {
   document.body.append(importInput);
   menu.append(
     item('i-folder', 'Import from folder…', () => pickFolder()),
+    item('i-upload', 'Publish to my site…', () => publishArchive()),
     item('i-cloud', 'Cloud sync…', () => { if (window.MiracleCloud) window.MiracleCloud.open(); }),
     item('i-link', 'Share archive (single file)', () => generateSharePage(null)),
     item('i-download', 'Export archive (JSON)', exportLibrary),
@@ -3339,6 +3423,7 @@ function onKeyDown(e) {
    ============================================================ */
 async function boot() {
   await loadState();
+  seedPublished();
   applyTheme();
   document.documentElement.dataset.rail = state.settings.rail === 'collapsed' ? 'collapsed' : 'open';
   currentView = state.settings.view || 'grid';
@@ -3365,6 +3450,8 @@ window.Miracle = {
   ingest, pushPhotos, processImage, renderExport, buildZip, crc32, dataUrlToBytes,
   saveDraft, go, openBundle, openCatDialog, exportLibrary, importLibrary,
   generateSharePage, shareTemplate, pickFolder, openBatchPicker, resetDraft,
+  publishArchive, downloadCategory, seedPublished,
+  get publishedMode() { return publishedMode; },
   confirmDialog, toast, visibleBundles, refreshAll, persist, loadState,
   get backend() { return backend; }
 };
