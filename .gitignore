@@ -5,4 +5,3 @@ node_modules/
 .verify/blk*.js
 .verify/app.css
 .verify/share-out.html
-/*.zip
