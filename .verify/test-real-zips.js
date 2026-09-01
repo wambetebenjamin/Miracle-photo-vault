@@ -32,6 +32,16 @@ const M = () => w.Miracle;
   ok('unpacked sizes are plausible JPEGs', amani.every(e => e.data.length > 20000), amani.map(e => e.data.length));
   ok('JPEG magic bytes present', amani.every(e => e.data[0] === 0xff && e.data[1] === 0xd8), amani[0] && [amani[0].data[0], amani[0].data[1]]);
 
+  console.log('\n== intact JPEGs pass through without re-encoding ==');
+  const rawZip = new w.File([fs.readFileSync(path.join(REAL, 'Amani flats 1500.zip'))], 'Amani flats 1500.zip', { type: 'application/zip' });
+  await M().importZipFiles([rawZip]); await wait(500);
+  const imported = M().state.bundles[0];
+  ok('bundle created from the real zip', imported.title === 'Amani flats 1500', imported.title);
+  ok('all 6 photos imported', imported.photos.length === 6, imported.photos.length);
+  const decoded = Buffer.from(imported.photos[0].src.split(',')[1], 'base64');
+  ok('photo bytes identical to the original file', decoded.equals(amani[0].data), [decoded.length, amani[0].data.length]);
+  ok('byte count recorded accurately', imported.photos[0].bytes === amani[0].data.length, [imported.photos[0].bytes, amani[0].data.length]);
+
   console.log('\n== every archive in the repo ==');
   const files = fs.readdirSync(REAL).filter(f => /\.zip$/i.test(f) && !/^(amani|kpk|nyagacho)\.zip$/.test(f));
   ok('all 21 repo archives present', files.length === 21, files.length);

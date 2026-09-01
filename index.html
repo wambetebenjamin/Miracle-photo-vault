@@ -1926,6 +1926,47 @@ function mimeOf(name) {
   const e = (m ? m[1] : '').toLowerCase();
   return e === 'jpg' ? 'image/jpeg' : (e ? 'image/' + e : 'application/octet-stream');
 }
+/* True when the bytes start with a known image signature. */
+function looksLikeImageBytes(b) {
+  if (!b || b.length < 12) return false;
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return true;              /* jpeg */
+  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return true; /* png */
+  if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) return true;              /* gif  */
+  if (b[0] === 0x42 && b[1] === 0x4d) return true;                               /* bmp  */
+  if (b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 &&
+      b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) return true; /* webp */
+  if (b[4] === 0x66 && b[5] === 0x74 && b[7] === 0x70) return true;              /* heif/avif */
+  if ((b[0] === 0x49 && b[1] === 0x49 && b[2] === 0x2a) || (b[0] === 0x4d && b[1] === 0x4d && b[3] === 0x2a)) return true; /* tiff */
+  return false;
+}
+function bytesToDataUrl(bytes, mime) {
+  let bin = '';
+  const CH = 0x8000;
+  for (let i = 0; i < bytes.length; i += CH) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+  return 'data:' + (mime || 'image/jpeg') + ';base64,' + btoa(bin);
+}
+function probeDims(src) {
+  return new Promise(res => {
+    const im = new Image();
+    im.onload = () => res({ w: im.naturalWidth || im.width || 0, h: im.naturalHeight || im.height || 0 });
+    im.onerror = () => res({ w: 0, h: 0 });
+    im.src = src;
+  });
+}
+/* Zip entry -> photo. Intact images pass through untouched (no re-encode, so
+   original quality is kept and a large archive loads far faster); anything
+   that is not obviously an image falls back to a decoding pass. */
+async function photoFromEntry(e) {
+  const nm = baseName(e.name);
+  if (looksLikeImageBytes(e.data)) {
+    const src = bytesToDataUrl(e.data, mimeOf(nm));
+    const dim = await probeDims(src);
+    return { id: uid('p'), src, name: nm, caption: '', alt: '', w: dim.w, h: dim.h, bytes: e.data.length };
+  }
+  const p = await processImage(new File([e.data], nm, { type: mimeOf(nm) }));
+  return { id: uid('p'), src: p.src, name: p.name || nm, caption: '', alt: '', w: p.w, h: p.h, bytes: p.bytes };
+}
+
 /* Each zip becomes one bundle, titled from its filename. */
 async function importZipFiles(files) {
   const zips = Array.from(files || []).filter(f => /\.zip$/i.test(f.name || '') || f.type === 'application/zip' || f.type === 'application/x-zip-compressed');
@@ -1938,11 +1979,7 @@ async function importZipFiles(files) {
     const images = entries.filter(e => IMAGE_RE.test(baseName(e.name)));
     const photos = [];
     for (const e of images) {
-      try {
-        const nm = baseName(e.name);
-        const p = await processImage(new File([e.data], nm, { type: mimeOf(nm) }));
-        photos.push({ id: uid('p'), src: p.src, name: p.name || nm, caption: '', alt: '', w: p.w, h: p.h, bytes: p.bytes });
-      } catch (err) {}
+      try { photos.push(await photoFromEntry(e)); } catch (err) {}
     }
     if (!photos.length) { failures.push(z.name + ': no readable photos inside'); continue; }
     state.bundles.unshift({
@@ -2001,11 +2038,8 @@ async function loadRepoBundles() {
       const photos = [];
       for (const e of entries) {
         const nm = baseName(e.name);
-        if (!IMAGE_RE.test(nm)) continue;
-        try {
-          const q = await processImage(new File([e.data], nm, { type: mimeOf(nm) }));
-          photos.push({ id: uid('p'), src: q.src, name: q.name || nm, caption: '', alt: '', w: q.w, h: q.h, bytes: q.bytes });
-        } catch (err) {}
+        if (!IMAGE_RE.test(nm) && !looksLikeImageBytes(e.data)) continue;
+        try { photos.push(await photoFromEntry(e)); } catch (err) {}
       }
       if (!photos.length) continue;
       if (!made) publishedMode = true;         /* read-only: never written to this browser */
