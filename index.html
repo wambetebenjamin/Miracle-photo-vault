@@ -1140,7 +1140,7 @@ body,.btn,.input,.select,.textarea,.chip,.tag,.kicker,.lead{font-family:var(--f-
                   <div class="formats">
                     <span class="fmt">JPG</span><span class="fmt">PNG</span><span class="fmt">WEBP</span><span class="fmt">GIF</span><span class="fmt">HEIC</span><span class="fmt">AVIF</span>
                   </div>
-                  <input type="file" id="fileInput" accept="image/*" multiple hidden>
+                  <input type="file" id="fileInput" accept="image/*,.zip,application/zip" multiple hidden>
                 </div>
 
                 <div class="progress" id="progress">
@@ -1859,6 +1859,118 @@ function routeIngest(files, label) {
   ingest(files, label);
 }
 
+/* ---- ZIP bundles ----------------------------------------------------
+   A zip's own filename becomes the bundle title, so "Kericho Trip.zip"
+   arrives as a bundle called "Kericho trip". Entries are read straight
+   from the central directory; stored entries copy, deflated ones inflate. */
+function blobToBytes(blob) {
+  if (typeof blob.arrayBuffer === 'function') return blob.arrayBuffer().then(b => new Uint8Array(b));
+  return new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onload = () => res(new Uint8Array(fr.result));
+    fr.onerror = () => rej(new Error('could not read the file'));
+    fr.readAsArrayBuffer(blob);
+  });
+}
+async function inflateRaw(bytes) {
+  if (typeof DecompressionStream !== 'function') {
+    throw new Error('this browser cannot unpack compressed zip entries');
+  }
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+async function readZip(blob) {
+  const buf = await blobToBytes(blob);
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  let eocd = -1;
+  const floor = Math.max(0, buf.length - 22 - 65536);
+  for (let i = buf.length - 22; i >= floor; i--) {
+    if (buf[i] === 0x50 && buf[i + 1] === 0x4b && buf[i + 2] === 0x05 && buf[i + 3] === 0x06) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('that file is not a readable zip');
+  const count = dv.getUint16(eocd + 10, true);
+  let off = dv.getUint32(eocd + 16, true);
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    if (off + 46 > buf.length || dv.getUint32(off, true) !== 0x02014b50) break;
+    const method = dv.getUint16(off + 10, true);
+    const compSize = dv.getUint32(off + 20, true);
+    const nameLen = dv.getUint16(off + 28, true);
+    const extraLen = dv.getUint16(off + 30, true);
+    const commentLen = dv.getUint16(off + 32, true);
+    const localOff = dv.getUint32(off + 42, true);
+    const name = new TextDecoder().decode(buf.subarray(off + 46, off + 46 + nameLen));
+    const lNameLen = dv.getUint16(localOff + 26, true);
+    const lExtraLen = dv.getUint16(localOff + 28, true);
+    const start = localOff + 30 + lNameLen + lExtraLen;
+    out.push({ name, method, data: buf.slice(start, start + compSize) });
+    off += 46 + nameLen + extraLen + commentLen;
+  }
+  const files = [];
+  for (const e of out) {
+    if (e.name.endsWith('/')) continue;
+    if (e.method === 0) { files.push(e); continue; }
+    if (e.method === 8) { e.data = await inflateRaw(e.data); files.push(e); continue; }
+    throw new Error('unsupported compression on ' + e.name);
+  }
+  return files;
+}
+function titleFromFilename(name) {
+  const base = String(name || '').replace(/\.[a-z0-9]{1,6}$/i, '').replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!base) return 'Untitled bundle';
+  return base.charAt(0).toUpperCase() + base.slice(1);
+}
+const baseName = p => String(p || '').split('/').pop();
+function mimeOf(name) {
+  const m = /\.([a-z0-9]+)$/i.exec(name || '');
+  const e = (m ? m[1] : '').toLowerCase();
+  return e === 'jpg' ? 'image/jpeg' : (e ? 'image/' + e : 'application/octet-stream');
+}
+/* Each zip becomes one bundle, titled from its filename. */
+async function importZipFiles(files) {
+  const zips = Array.from(files || []).filter(f => /\.zip$/i.test(f.name || '') || f.type === 'application/zip' || f.type === 'application/x-zip-compressed');
+  if (!zips.length) return 0;
+  let made = 0, photosTotal = 0;
+  const failures = [];
+  for (const z of zips) {
+    let entries;
+    try { entries = await readZip(z); } catch (e) { failures.push(z.name + ': ' + (e.message || e)); continue; }
+    const images = entries.filter(e => IMAGE_RE.test(baseName(e.name)));
+    const photos = [];
+    for (const e of images) {
+      try {
+        const nm = baseName(e.name);
+        const p = await processImage(new File([e.data], nm, { type: mimeOf(nm) }));
+        photos.push({ id: uid('p'), src: p.src, name: p.name || nm, caption: '', alt: '', w: p.w, h: p.h, bytes: p.bytes });
+      } catch (err) {}
+    }
+    if (!photos.length) { failures.push(z.name + ': no readable photos inside'); continue; }
+    state.bundles.unshift({
+      id: 'b_' + (state.nextBundle++),
+      title: titleFromFilename(z.name),
+      caption: '',
+      categoryId: (state.categories[0] || {}).id || null,
+      coverId: photos[0].id,
+      createdAt: new Date().toISOString(),
+      photos
+    });
+    made++; photosTotal += photos.length;
+  }
+  if (made) { await persist(); refreshAll(); }
+  if (made) toast('Imported', plural(made, 'bundle') + ' from zip · ' + plural(photosTotal, 'photo') + (failures.length ? ' · ' + failures.length + ' skipped' : ''), failures.length ? 'warn' : 'ok');
+  else if (failures.length) toast('Nothing imported', failures.join(' · '), 'bad');
+  return made;
+}
+/* Split an incoming drop/pick between plain photos and zip bundles. */
+function handleIncoming(files, label) {
+  const all = Array.from(files || []);
+  const zips = all.filter(f => /\.zip$/i.test(f.name || '') || f.type === 'application/zip' || f.type === 'application/x-zip-compressed');
+  const images = all.filter(looksLikeImage);
+  if (zips.length) importZipFiles(zips);
+  if (images.length) routeIngest(images, label);
+  if (!zips.length && !images.length) ingest([], label);
+}
+
 /* ---- Folder import: scan a folder (e.g. your WhatsApp images) and let you
    select a batch before anything is loaded in. ---- */
 async function gatherFromHandle(dir) {
@@ -1868,7 +1980,7 @@ async function gatherFromHandle(dir) {
     for await (const entry of handle.entries()) {
       const h = entry[1];
       if (h.kind === 'file') {
-        try { const f = await h.getFile(); if (f.type.startsWith('image/') || /\.(jpe?g|png|webp|avif|gif)$/i.test(f.name)) out.push(f); } catch (e) {}
+        try { const f = await h.getFile(); if (f.type.startsWith('image/') || /\.(jpe?g|png|webp|avif|gif)$/i.test(f.name) || /\.zip$/i.test(f.name)) out.push(f); } catch (e) {}
       } else if (h.kind === 'directory') await walk(h, depth + 1);
     }
   }
@@ -1880,16 +1992,24 @@ async function pickFolder() {
     if (window.showDirectoryPicker) {
       const handle = await window.showDirectoryPicker({ mode: 'read' });
       const files = await gatherFromHandle(handle);
-      if (!files.length) { toast('No photos found', 'That folder has no images in it.', 'warn'); return; }
-      openBatchPicker(files, handle.name || 'folder');
+      if (!files.length) { toast('No photos found', 'That folder has no images or zips in it.', 'warn'); return; }
+      const zips = files.filter(f => /\.zip$/i.test(f.name));
+      const images = files.filter(f => !/\.zip$/i.test(f.name));
+      if (zips.length) importZipFiles(zips);
+      if (images.length) openBatchPicker(images, handle.name || 'folder');
     } else {
       const input = document.createElement('input');
       input.type = 'file'; input.multiple = true;
       input.setAttribute('webkitdirectory', ''); input.setAttribute('directory', '');
       input.addEventListener('change', () => {
-        const files = Array.from(input.files || []).filter(f => f.type.startsWith('image/') || /\.(jpe?g|png|webp|avif|gif)$/i.test(f.name));
-        if (!files.length) toast('No photos found', 'That folder has no images in it.', 'warn');
-        else openBatchPicker(files, 'folder');
+        const files = Array.from(input.files || []).filter(f => f.type.startsWith('image/') || /\.(jpe?g|png|webp|avif|gif|zip)$/i.test(f.name));
+        if (!files.length) toast('No photos found', 'That folder has no images or zips in it.', 'warn');
+        else {
+          const zips = files.filter(f => /\.zip$/i.test(f.name));
+          const images = files.filter(f => !/\.zip$/i.test(f.name));
+          if (zips.length) importZipFiles(zips);
+          if (images.length) openBatchPicker(images, 'folder');
+        }
         input.remove();
       });
       document.body.appendChild(input); input.click();
@@ -2020,7 +2140,7 @@ function setupDragDrop() {
     e.preventDefault();
     dragDepth = 0; veil.classList.remove('on');
     const files = Array.from(e.dataTransfer.files || []);
-    if (files.length) routeIngest(files, 'drag and drop');
+    if (files.length) handleIncoming(files, 'drag and drop');
   });
 }
 
@@ -2223,7 +2343,7 @@ function setupComposer() {
   const dz = $('#dropzone'), fi = $('#fileInput');
   dz.addEventListener('click', () => fi.click());
   dz.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fi.click(); } });
-  fi.addEventListener('change', () => { ingest(fi.files, 'your device'); fi.value = ''; });
+  fi.addEventListener('change', () => { handleIncoming(fi.files, 'your device'); fi.value = ''; });
   $('#quickPaste').addEventListener('click', () => { if (location.hash !== '#composer') location.hash = '#composer'; fi.click(); });
   const heroDir = $('#heroDir');
   if (heroDir) heroDir.addEventListener('click', () => pickFolder());
@@ -3451,6 +3571,7 @@ window.Miracle = {
   saveDraft, go, openBundle, openCatDialog, exportLibrary, importLibrary,
   generateSharePage, shareTemplate, pickFolder, openBatchPicker, resetDraft,
   publishArchive, downloadCategory, seedPublished,
+  readZip, importZipFiles, titleFromFilename, handleIncoming,
   get publishedMode() { return publishedMode; },
   confirmDialog, toast, visibleBundles, refreshAll, persist, loadState,
   get backend() { return backend; }
