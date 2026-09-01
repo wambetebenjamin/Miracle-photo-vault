@@ -1993,7 +1993,7 @@ async function loadRepoBundles() {
     const url = typeof item === 'string' ? item : (item && item.path);
     if (!url) continue;
     try {
-      const r = await fetch(url, { cache: 'no-store' });
+      const r = await fetch(encodeURI(url), { cache: 'no-store' });
       if (!r || !r.ok) continue;
       const blob = await r.blob();
       const label = (item && typeof item === 'object' && item.name) || decodeURIComponent(String(url).split('/').pop());

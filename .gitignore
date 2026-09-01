@@ -1,6 +1,7 @@
 node_modules/
 .verify/node_modules/
 .verify/*.zip
+.verify/real/
 .verify/blk*.js
 .verify/app.css
 .verify/share-out.html
