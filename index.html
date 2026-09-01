@@ -1971,6 +1971,59 @@ function handleIncoming(files, label) {
   if (!zips.length && !images.length) ingest([], label);
 }
 
+/* ---- zips committed to the repo ------------------------------------
+   `bundles.json` is an optional list of zip paths shipped with the deploy,
+   e.g. ["bundles/Wedding.zip"]. Each one is fetched, unpacked in the
+   browser and shown as a bundle titled from its filename, so anyone with
+   the link sees them without uploading anything. Missing file = no-op. */
+async function loadRepoBundles() {
+  if (state.bundles.length) return 0;          /* a local archive wins */
+  let list;
+  try {
+    const r = await fetch('bundles.json', { cache: 'no-store' });
+    if (!r || !r.ok) return 0;
+    const ct = (r.headers && r.headers.get && r.headers.get('content-type')) || '';
+    if (/text\/html/i.test(ct)) return 0;      /* a hosting fallback page */
+    list = await r.json();
+  } catch (e) { return 0; }
+  const paths = Array.isArray(list) ? list : ((list && Array.isArray(list.bundles)) ? list.bundles : []);
+  if (!paths.length) return 0;
+  let made = 0;
+  for (const item of paths) {
+    const url = typeof item === 'string' ? item : (item && item.path);
+    if (!url) continue;
+    try {
+      const r = await fetch(url, { cache: 'no-store' });
+      if (!r || !r.ok) continue;
+      const blob = await r.blob();
+      const label = (item && typeof item === 'object' && item.name) || decodeURIComponent(String(url).split('/').pop());
+      const entries = await readZip(blob);
+      const photos = [];
+      for (const e of entries) {
+        const nm = baseName(e.name);
+        if (!IMAGE_RE.test(nm)) continue;
+        try {
+          const q = await processImage(new File([e.data], nm, { type: mimeOf(nm) }));
+          photos.push({ id: uid('p'), src: q.src, name: q.name || nm, caption: '', alt: '', w: q.w, h: q.h, bytes: q.bytes });
+        } catch (err) {}
+      }
+      if (!photos.length) continue;
+      if (!made) publishedMode = true;         /* read-only: never written to this browser */
+      state.bundles.push({
+        id: 'b_' + (state.nextBundle++),
+        title: titleFromFilename(label),
+        caption: '',
+        categoryId: (state.categories[0] || {}).id || null,
+        coverId: photos[0].id,
+        createdAt: new Date().toISOString(),
+        photos
+      });
+      made++;
+    } catch (e) {}
+  }
+  return made;
+}
+
 /* ---- Folder import: scan a folder (e.g. your WhatsApp images) and let you
    select a batch before anything is loaded in. ---- */
 async function gatherFromHandle(dir) {
@@ -3544,6 +3597,7 @@ function onKeyDown(e) {
 async function boot() {
   await loadState();
   seedPublished();
+  await loadRepoBundles();
   applyTheme();
   document.documentElement.dataset.rail = state.settings.rail === 'collapsed' ? 'collapsed' : 'open';
   currentView = state.settings.view || 'grid';
@@ -3571,7 +3625,7 @@ window.Miracle = {
   saveDraft, go, openBundle, openCatDialog, exportLibrary, importLibrary,
   generateSharePage, shareTemplate, pickFolder, openBatchPicker, resetDraft,
   publishArchive, downloadCategory, seedPublished,
-  readZip, importZipFiles, titleFromFilename, handleIncoming,
+  readZip, importZipFiles, titleFromFilename, handleIncoming, loadRepoBundles,
   get publishedMode() { return publishedMode; },
   confirmDialog, toast, visibleBundles, refreshAll, persist, loadState,
   get backend() { return backend; }
